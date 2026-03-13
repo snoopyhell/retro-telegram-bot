@@ -12,17 +12,22 @@ response = requests.post(
         "Content-Type": "application/json"
     },
     json={
-        "model": "gpt-4o-mini",
+        "model": "gpt-4.1-mini",
         "messages": [
             {
                 "role": "user",
-                "content": "Напиши ностальгический пост для Telegram про Sega или PS1. Тёплый стиль 90-х, 700-900 символов, добавь вопрос в конце."
+                "content": "Напиши ностальгический пост для Telegram про Sega или PS1. 700–900 символов, тёплый стиль 90-х, добавь эмодзи и вопрос в конце."
             }
         ]
     }
 )
 
-text = response.json()["choices"][0]["message"]["content"]
+data = response.json()
+
+if "choices" not in data:
+    raise Exception(f"OpenAI error: {data}")
+
+text = data["choices"][0]["message"]["content"]
 
 requests.post(
     f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
