@@ -4,17 +4,11 @@ import random
 import urllib.parse
 import json
 
-print("=== RETRO BOT PRO STARTED ===")
-
-# ======================
-# LOAD SECRETS
-# ======================
+print("=== RETRO BOT ULTRA STARTED ===")
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
-
-print("Secrets loaded")
 
 # ======================
 # LOAD TOPICS
@@ -37,62 +31,76 @@ if os.path.exists(USED_FILE):
 else:
     used_games = []
 
-available_games = [g for g in topics if g not in used_games]
+available = [g for g in topics if g not in used_games]
 
-if not available_games:
-    print("All games used, resetting history")
+if not available:
     used_games = []
-    available_games = topics
+    available = topics
 
-topic = random.choice(available_games)
-
-used_games.append(topic)
+game = random.choice(available)
+used_games.append(game)
 
 with open(USED_FILE, "w", encoding="utf-8") as f:
     json.dump(used_games, f)
 
-print("Chosen game:", topic)
+print("Chosen game:", game)
 
 # ======================
-# GET GAME IMAGE
+# IMAGE SYSTEM
 # ======================
 
-def get_game_image(game_name):
-
-    base_url = (
-        "https://raw.githubusercontent.com/"
-        "libretro-thumbnails/Sega - Mega Drive - Genesis/"
-        "Named_Boxarts/"
-    )
-
-    filename = urllib.parse.quote(game_name) + ".png"
-
-    return base_url + filename
+def image_exists(url):
+    try:
+        r = requests.head(url, timeout=10)
+        return r.status_code == 200
+    except:
+        return False
 
 
-image_url = get_game_image(topic)
+def get_game_image(game):
 
-print("Image URL:", image_url)
+    base = "https://raw.githubusercontent.com/libretro-thumbnails/Sega - Mega Drive - Genesis/Named_Boxarts/"
+
+    name1 = urllib.parse.quote(game) + ".png"
+    url1 = base + name1
+
+    if image_exists(url1):
+        return url1
+
+    # remove subtitles
+    short = game.split(" - ")[0]
+    name2 = urllib.parse.quote(short) + ".png"
+    url2 = base + name2
+
+    if image_exists(url2):
+        return url2
+
+    # fallback retro image
+    return "https://upload.wikimedia.org/wikipedia/commons/3/3e/Sega-Genesis-Mk2-6button.jpg"
+
+
+image_url = get_game_image(game)
+
+print("Image selected:", image_url)
 
 # ======================
 # GENERATE POST
 # ======================
 
 prompt = f"""
-Напиши короткий ностальгический пост про игру "{topic}".
+Напиши короткий ностальгический пост про игру {game}.
 
 Формат:
 
 Название игры
 
-Короткий ностальгический текст 3-5 предложений про атмосферу
-ретро-игр 90-х и воспоминания детства.
+3-4 предложения воспоминаний о ретро играх 90-х,
+игровых вечерах и атмосфере Sega.
 
 Стиль:
-простая тёплая ностальгия
+тёплая ностальгия
+как воспоминание игрока
 без эмодзи
-без списков
-как будто воспоминание игрока 90-х.
 """
 
 print("Generating post...")
@@ -101,15 +109,15 @@ response = requests.post(
     "https://openrouter.ai/api/v1/chat/completions",
     headers={
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
     },
     json={
         "model": "openai/gpt-4o-mini",
         "messages": [
             {"role": "user", "content": prompt}
-        ],
+        ]
     },
-    timeout=60,
+    timeout=60
 )
 
 print("OpenRouter status:", response.status_code)
@@ -121,54 +129,50 @@ text = data["choices"][0]["message"]["content"]
 print("Text generated")
 
 # ======================
-# ADD HASHTAGS
+# HASHTAGS
 # ======================
 
 hashtags = """
 
-#ретро #sega #retrogaming
-#90s #segagenesis
+#retro #retrogaming
+#sega #segagenesis
+#90s #videogames
 """
 
-post_text = f"{text}\n{hashtags}"
+post = f"{text}\n{hashtags}"
 
-# Telegram caption limit
-post_text = post_text[:1024]
+post = post[:1024]
 
 # ======================
-# SEND PHOTO
+# SEND TO TELEGRAM
 # ======================
 
 print("Sending photo...")
 
-telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
 
 payload = {
     "chat_id": CHAT_ID,
     "photo": image_url,
-    "caption": post_text
+    "caption": post
 }
 
-r = requests.post(telegram_url, data=payload)
+r = requests.post(url, data=payload)
 
 print("Telegram status:", r.status_code)
+print("Telegram response:", r.text)
 
-# ======================
-# FALLBACK TEXT
-# ======================
-
+# fallback text (очень редко)
 if r.status_code != 200:
 
-    print("Photo failed, sending text only")
+    print("Photo failed, sending text")
 
-    fallback = requests.post(
+    requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
         data={
             "chat_id": CHAT_ID,
-            "text": post_text
-        },
+            "text": post
+        }
     )
-
-    print("Fallback status:", fallback.status_code)
 
 print("=== DONE ===")
