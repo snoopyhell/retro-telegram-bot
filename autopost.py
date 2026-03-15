@@ -7,20 +7,32 @@ import re
 
 print("=== RETRO BOT ULTRA STARTED ===")
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHAT_ID = os.environ["CHAT_ID"]
-OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
+# Получаем ключи и убираем лишние пробелы/символы
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+CHAT_ID = os.environ.get("CHAT_ID", "").strip()
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
+
+# Проверка токена (самая частая ошибка)
+if not BOT_TOKEN or not CHAT_ID:
+    print("ERROR: BOT_TOKEN or CHAT_ID is empty!")
+    exit(1)
 
 # ======================
 # LOAD TOPICS
 # ======================
-with open("topics.txt", "r", encoding="utf-8") as f:
-    topics = [t.strip() for t in f.readlines() if t.strip()]
+try:
+    with open("topics.txt", "r", encoding="utf-8") as f:
+        topics = [t.strip() for t in f.readlines() if t.strip()]
+except:
+    topics = ["Sonic the Hedgehog"]
 
+USED_FILE = "used_games.json"
 used_games = []
-if os.path.exists("used_games.json"):
-    with open("used_games.json", "r", encoding="utf-8") as f:
-        used_games = json.load(f)
+if os.path.exists(USED_FILE):
+    try:
+        with open(USED_FILE, "r", encoding="utf-8") as f:
+            used_games = json.load(f)
+    except: pass
 
 available = [g for g in topics if g not in used_games]
 if not available:
@@ -29,28 +41,26 @@ if not available:
 
 game = random.choice(available)
 used_games.append(game)
-with open("used_games.json", "w", encoding="utf-8") as f:
+with open(USED_FILE, "w", encoding="utf-8") as f:
     json.dump(used_games, f)
 
 print(f"Chosen game: {game}")
 
 # ======================
-# IMAGE SYSTEM (FIXED URLS)
+# IMAGE SYSTEM
 # ======================
 def get_game_image(game_name):
-    # 1. Поиск через Bing (Исправлен путь /images/search)
     try:
         query = urllib.parse.quote(f"{game_name} Sega Genesis Box Art")
+        # Исправлен URL Bing
         search_url = f"https://www.bing.com{query}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(search_url, headers=headers, timeout=10)
+        res = requests.get(search_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         match = re.search(r'murl&quot;:&quot;(http[^&]+)&quot;', res.text)
         if match:
             return match.group(1)
-    except:
-        pass
-
-    # 2. Запасной путь GitHub (Исправлен слеш после .com)
+    except: pass
+    
+    # Fallback на GitHub (исправлен путь)
     base = "https://raw.githubusercontent.com"
     name = urllib.parse.quote(game_name.replace(":", " _")) + ".png"
     return base + name
@@ -61,12 +71,10 @@ print(f"Image URL: {image_url}")
 # ======================
 # GENERATE POST
 # ======================
-prompt = f"Напиши короткий ностальгический пост про игру {game} на Sega Genesis. Название игры, затем 3-4 предложения воспоминаний игрока из 90-х. Без эмодзи, стиль теплой ностальгии."
-
-text = f"{game}\nПомню, как часами сидели перед телевизором, проходя этот шедевр." # Дефолтный текст
+prompt = f"Напиши очень короткий ностальгический пост про игру {game} для Sega. 3 предложения без эмодзи."
+text = f"{game}\nКлассика золотой эпохи Sega, которую мы проходили на выходных."
 
 try:
-    # Исправлен полный путь к API
     response = requests.post(
         "https://openrouter.ai",
         headers={
@@ -77,30 +85,35 @@ try:
             "model": "openai/gpt-4o-mini",
             "messages": [{"role": "user", "content": prompt}]
         },
-        timeout=30
+        timeout=20
     )
-    if response.status_code == 200:
-        data = response.json()
-        text = data["choices"][0]["message"]["content"]
+    # Исправлено чтение ответа
+    result = response.json()
+    if 'choices' in result:
+        text = result['choices'][0]['message']['content']
 except Exception as e:
     print(f"AI Error: {e}")
 
-hashtags = "\n\n#retro #retrogaming #sega #90s"
-post = (text + hashtags)[:1024]
+post = f"{text}\n\n#retro #sega #90s"[:1024]
 
 # ======================
-# SEND TO TELEGRAM (FIXED /bot)
+# SEND TO TELEGRAM (FIXED)
 # ======================
-# ВАЖНО: Добавлен слеш перед bot и после него
-url_photo = f"https://api.telegram.org{BOT_TOKEN}/sendPhoto"
-url_msg = f"https://api.telegram.org{BOT_TOKEN}/sendMessage"
+# Собираем URL максимально надежно
+base_url = f"https://api.telegram.org{BOT_TOKEN}"
+photo_url = f"{base_url}/sendPhoto"
+msg_url = f"{base_url}/sendMessage"
 
 print("Sending...")
 try:
-    r = requests.post(url_photo, data={"chat_id": CHAT_ID, "photo": image_url, "caption": post})
+    # Пробуем отправить фото
+    r = requests.post(photo_url, data={"chat_id": CHAT_ID, "photo": image_url, "caption": post}, timeout=20)
     if r.status_code != 200:
-        print(f"Photo failed: {r.text}")
-        requests.post(url_msg, data={"chat_id": CHAT_ID, "text": post})
+        print(f"Photo failed ({r.status_code}): {r.text}")
+        # Если фото не прошло, шлем только текст
+        requests.post(msg_url, data={"chat_id": CHAT_ID, "text": post}, timeout=20)
+    else:
+        print("Success!")
 except Exception as e:
     print(f"Telegram Error: {e}")
 
