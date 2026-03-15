@@ -8,12 +8,15 @@ on:
 jobs:
   post:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v3
+
+      - name: Install requests
+        run: pip install requests
+
       - name: Run bot
-        run: |
-          pip install requests
-          python autopost.py
+        run: python autopost.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
