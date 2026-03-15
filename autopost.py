@@ -6,30 +6,18 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 
+print("Bot started")
+
 with open("topics.txt", "r", encoding="utf-8") as f:
     topics = f.read().splitlines()
 
-with open("used_topics.txt", "r", encoding="utf-8") as f:
-    used = set(f.read().splitlines())
+print("Topics loaded:", topics)
 
-available = [t for t in topics if t not in used]
+topic = random.choice(topics)
 
-if not available:
-    available = topics
-    open("used_topics.txt", "w").close()
+print("Selected topic:", topic)
 
-topic = random.choice(available)
-
-with open("used_topics.txt", "a", encoding="utf-8") as f:
-    f.write(topic + "\n")
-
-prompt = f"""
-Напиши ностальгический пост про {topic}.
-Стиль: воспоминания 90-х.
-Тема: Sega и PlayStation 1.
-Длина: 800–1000 символов.
-Добавь эмодзи и вопрос в конце.
-"""
+prompt = f"Напиши короткий ностальгический пост про {topic} и ретро-игры."
 
 response = requests.post(
     "https://openrouter.ai/api/v1/chat/completions",
@@ -43,9 +31,17 @@ response = requests.post(
     }
 )
 
-text = response.json()["choices"][0]["message"]["content"]
+print("OpenRouter response:", response.text)
 
-requests.post(
+data = response.json()
+
+text = data["choices"][0]["message"]["content"]
+
+print("Generated text:", text)
+
+r = requests.post(
     f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
     data={"chat_id": CHAT_ID, "text": text}
 )
+
+print("Telegram response:", r.text)
