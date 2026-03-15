@@ -1,38 +1,51 @@
 import requests
 import os
+import random
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
+
+with open("topics.txt", "r", encoding="utf-8") as f:
+    topics = f.read().splitlines()
+
+with open("used_topics.txt", "r", encoding="utf-8") as f:
+    used = set(f.read().splitlines())
+
+available = [t for t in topics if t not in used]
+
+if not available:
+    available = topics
+    open("used_topics.txt", "w").close()
+
+topic = random.choice(available)
+
+with open("used_topics.txt", "a", encoding="utf-8") as f:
+    f.write(topic + "\n")
+
+prompt = f"""
+Напиши ностальгический пост про {topic}.
+Стиль: воспоминания 90-х.
+Тема: Sega и PlayStation 1.
+Длина: 500–800 символов.
+Добавь эмодзи и вопрос в конце.
+"""
 
 response = requests.post(
-    "https://api.openai.com/v1/chat/completions",
+    "https://openrouter.ai/api/v1/chat/completions",
     headers={
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json"
     },
     json={
-        "model": "gpt-4.1-mini",
-        "messages": [
-            {
-                "role": "user",
-                "content": "Напиши ностальгический пост для Telegram про Sega или PS1. 700–900 символов, тёплый стиль 90-х, добавь эмодзи и вопрос в конце."
-            }
-        ]
+        "model": "openai/gpt-4o-mini",
+        "messages": [{"role": "user", "content": prompt}]
     }
 )
 
-data = response.json()
-
-if "choices" not in data:
-    raise Exception(f"OpenAI error: {data}")
-
-text = data["choices"][0]["message"]["content"]
+text = response.json()["choices"][0]["message"]["content"]
 
 requests.post(
     f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-    data={
-        "chat_id": CHAT_ID,
-        "text": text
-    }
+    data={"chat_id": CHAT_ID, "text": text}
 )
