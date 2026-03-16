@@ -1,164 +1,151 @@
 import requests
 import os
 import random
-import urllib.parse
+import re
+from urllib.parse import quote
 
-print("=== BOT START ===")
+print("=== RETRO BOT ULTRA START ===")
 
-# =============================
-# SECRETS
-# =============================
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 
-print("Secrets OK")
+# ---------------- LOAD GAMES ----------------
 
-# =============================
-# LOAD TOPICS
-# =============================
 with open("topics.txt", "r", encoding="utf-8") as f:
-    games = [g.strip() for g in f.readlines() if g.strip()]
+    all_games = [g.strip() for g in f if g.strip()]
 
-game = random.choice(games)
-print("Selected game:", game)
+posted = set()
+if os.path.exists("posted.txt"):
+    with open("posted.txt", "r", encoding="utf-8") as f:
+        posted = set(x.strip() for x in f)
 
-# =============================
-# IMAGE SETTINGS
-# =============================
-IMAGE_PATH = "cover.png"
-FALLBACK_IMAGE = "fallback.png"
+available = [g for g in all_games if g not in posted]
 
-SYSTEMS = [
+if not available:
+    print("All games posted. Resetting history.")
+    open("posted.txt", "w").close()
+    available = all_games
+
+game = random.choice(available)
+print("Selected:", game)
+
+# ---------------- CLEAN NAME ----------------
+
+def clean_name(name):
+    name = re.sub(r"\(.*?\)", "", name)
+    name = re.sub(r"\[.*?\]", "", name)
+    name = name.replace(":", "")
+    return name.strip()
+
+clean_game = clean_name(game)
+
+# ---------------- IMAGE SEARCH ----------------
+
+systems = [
     "Sega - Mega Drive - Genesis",
-    "Nintendo - Super Nintendo Entertainment System",
-    "Nintendo - Nintendo Entertainment System",
     "Sony - PlayStation",
-    "Nintendo - Game Boy Advance",
+    "Nintendo - Super Nintendo Entertainment System",
+    "Nintendo - Nintendo Entertainment System"
 ]
 
-BASE_URL = "https://raw.githubusercontent.com/libretro-thumbnails"
+def find_image(title):
+    variants = [
+        title,
+        title.replace("IV", "4"),
+        title.replace("III", "3"),
+        title.replace("II", "2"),
+    ]
 
-
-# =============================
-# DOWNLOAD IMAGE
-# =============================
-def generate_name_variants(name):
-    variants = set()
-
-    variants.add(name)
-    variants.add(name.replace(":", ""))
-    variants.add(name.replace("-", ""))
-    variants.add(name.replace("IV", "4"))
-    variants.add(name.replace("III", "3"))
-    variants.add(name.replace("II", "2"))
-
-    # убираем двойные пробелы
-    variants = {v.replace("  ", " ").strip() for v in variants}
-
-    return list(variants)
-
-
-def download_image(game_name):
-    variants = generate_name_variants(game_name)
-
-    for variant in variants:
-        encoded = urllib.parse.quote(variant)
-
-        for system in SYSTEMS:
-            url = f"{BASE_URL}/{system}/Named_Boxarts/{encoded}.png"
-
-            print("Trying image:", url)
+    for system in systems:
+        for v in variants:
+            url = f"https://raw.githubusercontent.com/libretro-thumbnails/{quote(system)}/Named_Boxarts/{quote(v)}.png"
+            print("Checking image:", url)
 
             try:
-                r = requests.get(url, timeout=15)
+                r = requests.head(url, timeout=10)
+                if r.status_code == 200:
+                    print("IMAGE FOUND")
+                    return url
+            except:
+                pass
 
-                # Telegram ломается от маленьких PNG
-                if r.status_code == 200 and len(r.content) > 15000:
-                    with open(IMAGE_PATH, "wb") as f:
-                        f.write(r.content)
+    return None
 
-                    print("Image downloaded:", variant)
-                    return True
+image_url = find_image(clean_game)
 
-            except Exception as e:
-                print("Image error:", e)
+if not image_url:
+    raise Exception("No valid image found — stopping post")
 
-    return False
-
-
-# =============================
-# IMAGE SELECT
-# =============================
-if not download_image(game):
-    print("Using local fallback image")
-    IMAGE_PATH = FALLBACK_IMAGE
-
-print("Image size:", os.path.getsize(IMAGE_PATH))
-
-
-# =============================
-# GENERATE TEXT (GAMEPLAY STYLE)
-# =============================
-print("Generating text...")
+# ---------------- GENERATE POST ----------------
 
 prompt = f"""
-Напиши короткий пост (3-5 предложений) про игру {game}.
+Напиши пост про игру {game}.
 
 Стиль:
-- описание геймплея
-- особенности игры
-- механики
-- чем игра выделялась
-- без сильной ностальгии
-- живой игровой стиль
+— описание геймплея
+— ключевые механики
+— особенности уровня или боевой системы
+— чем игра отличалась
 
-Без эмодзи.
+Добавь:
+Жанр:
+Год выхода:
+Платформа:
+
+6 предложений максимум.
 """
 
 response = requests.post(
     "https://openrouter.ai/api/v1/chat/completions",
     headers={
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
     },
     json={
         "model": "openai/gpt-4o-mini",
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": prompt}]
     },
-    timeout=60,
+    timeout=60
 )
 
-print("OpenRouter status:", response.status_code)
-print("OpenRouter raw:", response.text[:300])
+if response.status_code != 200:
+    raise Exception("OpenRouter error: " + response.text)
 
 data = response.json()
 
 text = data["choices"][0]["message"]["content"].strip()
 
-caption = f"🎮 {game}\n\n{text}"
+if not text:
+    raise Exception("Empty text from AI")
 
-print("Text generated OK")
+caption = f"🎮 {game}\n\n{text}\n\n#retrogaming #sega #ps1 #retro"
 
+# ---------------- SEND TELEGRAM ----------------
 
-# =============================
-# SEND TO TELEGRAM
-# =============================
-print("Sending to Telegram...")
+print("Sending post...")
 
-with open(IMAGE_PATH, "rb") as photo:
-    r = requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-        data={
-            "chat_id": CHAT_ID,
-            "caption": caption,
-            "parse_mode": "HTML",
-        },
-        files={"photo": photo},
-        timeout=60,
-    )
+tg = requests.post(
+    f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+    data={
+        "chat_id": CHAT_ID,
+        "photo": image_url,
+        "caption": caption
+    },
+    timeout=60
+)
 
-print("Telegram status:", r.status_code)
-print("Telegram response:", r.text)
+print("Telegram:", tg.text)
 
-print("=== BOT END ===")
+tg_data = tg.json()
+
+if not tg_data.get("ok"):
+    raise Exception("Telegram failed: " + tg.text)
+
+# ---------------- SAVE HISTORY ----------------
+
+with open("posted.txt", "a", encoding="utf-8") as f:
+    f.write(game + "\n")
+
+print("Post published successfully")
+print("=== RETRO BOT ULTRA END ===")
