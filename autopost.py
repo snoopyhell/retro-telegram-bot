@@ -42,6 +42,8 @@ clean_game = clean_name(game)
 
 # ---------------- IMAGE SEARCH ----------------
 
+# ---------------- IMAGE SEARCH (ULTRA SMART) ----------------
+
 systems = [
     "Sega - Mega Drive - Genesis",
     "Sony - PlayStation",
@@ -49,33 +51,53 @@ systems = [
     "Nintendo - Nintendo Entertainment System"
 ]
 
+def name_variants(title):
+    base = title
+
+    variants = set()
+
+    variants.add(base)
+    variants.add(base.replace("-", " "))
+    variants.add(base.replace("-", ""))
+    variants.add(base.replace(":", ""))
+    variants.add(base.replace(" - ", " "))
+
+    # region variants used by libretro
+    regions = ["USA", "Europe", "World", "Japan"]
+
+    for v in list(variants):
+        for r in regions:
+            variants.add(f"{v} ({r})")
+
+    return list(variants)
+
+
 def find_image(title):
-    variants = [
-        title,
-        title.replace("IV", "4"),
-        title.replace("III", "3"),
-        title.replace("II", "2"),
-    ]
+    variants = name_variants(title)
 
     for system in systems:
-        for v in variants:
-            url = f"https://raw.githubusercontent.com/libretro-thumbnails/{quote(system)}/Named_Boxarts/{quote(v)}.png"
+        for name in variants:
+            url = f"https://raw.githubusercontent.com/libretro-thumbnails/{quote(system)}/Named_Boxarts/{quote(name)}.png"
+
             print("Checking image:", url)
 
             try:
                 r = requests.head(url, timeout=10)
+
                 if r.status_code == 200:
-                    print("IMAGE FOUND")
+                    print("✅ IMAGE FOUND:", name)
                     return url
-            except:
-                pass
+
+            except Exception as e:
+                print("Skip:", e)
 
     return None
+
 
 image_url = find_image(clean_game)
 
 if not image_url:
-    raise Exception("No valid image found — stopping post")
+    raise Exception(f"No image found for '{clean_game}'")
 
 # ---------------- GENERATE POST ----------------
 
