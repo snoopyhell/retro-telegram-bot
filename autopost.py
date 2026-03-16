@@ -43,26 +43,46 @@ BASE_URL = "https://raw.githubusercontent.com/libretro-thumbnails"
 # =============================
 # DOWNLOAD IMAGE
 # =============================
+def generate_name_variants(name):
+    variants = set()
+
+    variants.add(name)
+    variants.add(name.replace(":", ""))
+    variants.add(name.replace("-", ""))
+    variants.add(name.replace("IV", "4"))
+    variants.add(name.replace("III", "3"))
+    variants.add(name.replace("II", "2"))
+
+    # убираем двойные пробелы
+    variants = {v.replace("  ", " ").strip() for v in variants}
+
+    return list(variants)
+
+
 def download_image(game_name):
-    encoded = urllib.parse.quote(game_name)
+    variants = generate_name_variants(game_name)
 
-    for system in SYSTEMS:
-        url = f"{BASE_URL}/{system}/Named_Boxarts/{encoded}.png"
+    for variant in variants:
+        encoded = urllib.parse.quote(variant)
 
-        print("Trying image:", url)
+        for system in SYSTEMS:
+            url = f"{BASE_URL}/{system}/Named_Boxarts/{encoded}.png"
 
-        try:
-            r = requests.get(url, timeout=15)
+            print("Trying image:", url)
 
-            if r.status_code == 200 and len(r.content) > 5000:
-                with open(IMAGE_PATH, "wb") as f:
-                    f.write(r.content)
+            try:
+                r = requests.get(url, timeout=15)
 
-                print("Image downloaded OK")
-                return True
+                # Telegram ломается от маленьких PNG
+                if r.status_code == 200 and len(r.content) > 15000:
+                    with open(IMAGE_PATH, "wb") as f:
+                        f.write(r.content)
 
-        except Exception as e:
-            print("Image error:", e)
+                    print("Image downloaded:", variant)
+                    return True
+
+            except Exception as e:
+                print("Image error:", e)
 
     return False
 
