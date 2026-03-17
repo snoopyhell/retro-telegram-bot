@@ -1,186 +1,115 @@
 import requests
-import os
 import random
-import json
-import urllib.parse
-
-print("=== RETRO BOT ULTRA+ START ===")
-
-# ================= CONFIG =================
+import os
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
+RAWG_API_KEY = os.environ["RAWG_API_KEY"]
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+print("=== RETRO BOT AUTO START ===")
 
-SYSTEM_PROMPT = """
-Ты пишешь посты для Telegram канала про ретро-игры.
+# ---------------- LOAD GAME ----------------
 
-Стиль:
-— коротко (600–900 символов)
-— описывай геймплей
-— особенности игры
-— механики
-— чем она запомнилась игрокам
-— минимум ностальгии
-— без вступлений типа "Помню как..."
-— живой игровой стиль
+with open("games.txt", encoding="utf-8") as f:
+    games = [g.strip() for g in f if g.strip()]
 
-Формат:
-🎮 Название
-описание
-2-4 коротких абзаца
-в конце хештеги
-"""
-
-# ================= LOAD TOPICS =================
-
-with open("topics.txt", "r", encoding="utf-8") as f:
-    games = [x.strip() for x in f.readlines() if x.strip()]
-
-# ===== anti repeat =====
-USED_FILE = "used_games.json"
-
-if os.path.exists(USED_FILE):
-    used = json.load(open(USED_FILE))
-else:
-    used = []
-
-available = [g for g in games if g not in used]
-
-if not available:
-    used = []
-    available = games
-
-game = random.choice(available)
-used.append(game)
-
-json.dump(used, open(USED_FILE, "w"))
-
+game = random.choice(games)
 print("Selected:", game)
 
-# ================= PLATFORM TAGS =================
+# ---------------- GET IMAGE FROM RAWG ----------------
 
-def platform_tags(name):
-    return "#retrogaming #retro #sega #90s"
+def get_game_image(name):
 
-tags = platform_tags(game)
+    url = "https://api.rawg.io/api/games"
 
-# ================= IMAGE SEARCH =================
+    r = requests.get(
+        url,
+        params={
+            "key": RAWG_API_KEY,
+            "search": name,
+            "page_size": 1
+        },
+        timeout=30
+    )
 
-SYSTEMS = [
-    "Sega - Mega Drive - Genesis",
-    "Nintendo - Super Nintendo Entertainment System",
-    "Nintendo - Nintendo Entertainment System",
-    "Sony - PlayStation",
-]
+    data = r.json()
 
-REGIONS = ["(World)", "(USA)", "(Europe)", "(Japan)", ""]
+    results = data.get("results")
 
-def image_exists(url):
-    try:
-        r = requests.head(url, timeout=10)
-        return r.status_code == 200
-    except:
-        return False
+    if not results:
+        return None
 
-def find_image(game):
-    encoded = urllib.parse.quote(game)
+    image = results[0].get("background_image")
 
-    for system in SYSTEMS:
-        base = f"https://raw.githubusercontent.com/libretro-thumbnails/{urllib.parse.quote(system)}/Named_Boxarts"
+    return image
 
-        for region in REGIONS:
-            name = f"{encoded}%20{urllib.parse.quote(region)}" if region else encoded
-            url = f"{base}/{name}.png"
 
-            print("Checking:", url)
+image_url = get_game_image(game)
 
-            if image_exists(url):
-                print("IMAGE FOUND")
-                return url
+print("Image:", image_url)
 
-    return None
+# ---------------- GENERATE TEXT ----------------
 
-image_url = find_image(game)
+def generate_text(game):
 
-if not image_url:
-    print("No image found — text only mode")
+    prompt = f"""
+Опиши ретро-игру {game}.
+Кратко расскажи:
+- геймплей
+- механики
+- особенности
+4 предложения.
+Без ностальгии.
+"""
 
-# ================= GENERATE TEXT =================
+    r = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "openai/gpt-4o-mini",
+            "messages": [{"role": "user", "content": prompt}]
+        },
+        timeout=120
+    )
 
-print("Generating text...")
+    r.raise_for_status()
 
-prompt = f"Напиши пост про игру {game}"
+    return r.json()["choices"][0]["message"]["content"].strip()
 
-response = requests.post(
-    OPENROUTER_URL,
-    headers={
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    },
-    json={
-        "model": "openai/gpt-4o-mini",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt}
-        ]
-    },
-    timeout=120
-)
 
-print("OpenRouter status:", response.status_code)
+text = generate_text(game)
 
-data = response.json()
-text = data["choices"][0]["message"]["content"].strip()
+caption = f"🎮 {game}\n\n{text}"
 
-text += f"\n\n{tags}"
+# ---------------- TELEGRAM POST ----------------
 
-print("Text generated")
+if image_url:
 
-# ================= TELEGRAM POST =================
-
-print("Sending to Telegram...")
-
-def send_photo():
-    return requests.post(
+    r = requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
         data={
             "chat_id": CHAT_ID,
             "photo": image_url,
-            "caption": text[:1024],
-            "parse_mode": "HTML"
+            "caption": caption[:1024]
         },
         timeout=60
     )
 
-def send_text():
-    return requests.post(
+else:
+
+    r = requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
         data={
             "chat_id": CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML"
-        },
-        timeout=60
+            "text": caption
+        }
     )
 
-if image_url:
-    tg = send_photo()
+print("Telegram:", r.text)
+r.raise_for_status()
 
-    # fallback если Telegram не смог обработать картинку
-    if not tg.ok:
-        print("Image failed → fallback to text")
-        tg = send_text()
-else:
-    tg = send_text()
-
-print("Telegram status:", tg.status_code)
-print("Telegram response:", tg.text)
-
-if not tg.ok:
-    raise Exception("Telegram post failed")
-
-print("✅ POST SUCCESS")
-print("=== RETRO BOT ULTRA+ END ===")
+print("=== POST SUCCESS ===")
