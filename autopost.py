@@ -1,146 +1,123 @@
 import requests
-import os
 import random
-import urllib.parse
+import os
 
-print("=== RETRO BOT FINAL START ===")
+print("=== SEGA AUTO BOT START ===")
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHAT_ID = os.environ["CHAT_ID"]
-OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
-RAWG_API_KEY = os.environ["RAWG_API_KEY"]
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+RAWG_API_KEY = os.getenv("RAWG_API_KEY")
 
-# ---------------- LOAD GAMES ----------------
+# -------------------------
+# LOAD GAMES FROM FILE
+# -------------------------
 
-with open("topics.txt", encoding="utf-8") as f:
-    games = [g.strip() for g in f if g.strip()]
+if not os.path.exists("games.txt"):
+    raise Exception("games.txt not found")
+
+with open("games.txt", encoding="utf-8") as f:
+    games = [g.strip() for g in f.readlines() if g.strip()]
+
+if not games:
+    raise Exception("games.txt is empty")
 
 game = random.choice(games)
-print("Selected game:", game)
+print("Selected:", game)
 
-# ---------------- RAWG IMAGE SEARCH ----------------
+# -------------------------
+# GET IMAGE FROM RAWG
+# -------------------------
 
-def get_game_image(game_name):
-    query = urllib.parse.quote(game_name)
+def get_image(game):
+    url = f"https://api.rawg.io/api/games?key={RAWG_API_KEY}&search={game}&page_size=5"
+    r = requests.get(url).json()
 
-    url = (
-        f"https://api.rawg.io/api/games"
-        f"?key={RAWG_API_KEY}"
-        f"&search={query}"
-        f"&page_size=5"
-    )
+    for g in r.get("results", []):
+        if g.get("background_image"):
+            return g["background_image"]
 
-    r = requests.get(url, timeout=20)
-    data = r.json()
+    raise Exception(f"No image found for {game}")
 
-    if not data.get("results"):
-        return None
+image_url = get_image(game)
+print("Image OK")
 
-    # ищем максимально похожее название
-    for g in data["results"]:
-        name = g["name"].lower()
-        if game_name.lower() in name:
-            print("Matched RAWG:", g["name"])
-            return g.get("background_image")
+# -------------------------
+# BUILD POST FORMAT
+# -------------------------
 
-    # fallback — первый результат
-    return data["results"][0].get("background_image")
+formats = [
 
+f"""
+Напиши короткий пост до 500 символов про игру {game}.
+Опиши геймплей и особенности.
+Без ностальгии.
+В конце задай вопрос.
+Добавь теги #sega #retrogaming #megadrive
+""",
 
-image_url = get_game_image(game)
+f"""
+Сделай сравнение игры {game} с другой игрой SEGA.
+Коротко и по делу.
+В конце вопрос аудитории.
+Добавь теги #sega #retrogaming
+""",
 
-if not image_url:
-    raise Exception("No image found — stopping post")
-
-print("Image:", image_url)
-
-# ---------------- GENERATE TEXT ----------------
-
-prompt = f"""
-Напиши короткое описание ретро-игры "{game}".
-
-Требования:
-- 5–7 предложений
-- описание геймплея
-- особенности игры
-- механики
-- без ностальгии
-- стиль как обзор игры
+f"""
+Напиши интересный факт про игру {game}.
+1-2 предложения описания.
+Затем вопрос читателю.
+Добавь теги.
 """
+]
+
+prompt = random.choice(formats)
+
+# -------------------------
+# GENERATE TEXT
+# -------------------------
+
+headers = {
+    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+    "Content-Type": "application/json"
+}
 
 response = requests.post(
     "https://openrouter.ai/api/v1/chat/completions",
-    headers={
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    },
+    headers=headers,
     json={
         "model": "openai/gpt-4o-mini",
-        "messages": [{"role": "user", "content": prompt}],
-    },
-    timeout=60,
+        "messages": [{"role": "user", "content": prompt}]
+    }
 )
 
 data = response.json()
-text = data["choices"][0]["message"]["content"]
+text = data["choices"][0]["message"]["content"].strip()
 
-caption = f"<b>{game}</b>\n\n{text}"
+# Telegram caption protection
+if len(text) > 900:
+    text = text[:880] + "..."
 
-# ---------------- SEND TO TELEGRAM ----------------
+print("Text generated")
 
-# ---------------- SEND TO TELEGRAM ----------------
+# -------------------------
+# SEND TO TELEGRAM
+# -------------------------
 
-telegram_photo_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-telegram_text_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
 
-caption = f"<b>{game}</b>\n\n{text}"
+payload = {
+    "chat_id": CHAT_ID,
+    "photo": image_url,
+    "caption": text,
+    "parse_mode": "HTML"
+}
 
-MAX_CAPTION = 1024
+r = requests.post(telegram_url, data=payload)
 
-print("Sending post...")
+print("Telegram:", r.status_code, r.text)
 
-# ✅ если текст помещается — отправляем одним постом
-if len(caption) <= MAX_CAPTION:
-
-    r = requests.post(
-        telegram_photo_url,
-        data={
-            "chat_id": CHAT_ID,
-            "photo": image_url,
-            "caption": caption,
-            "parse_mode": "HTML",
-        },
-    )
-
-else:
-    print("Caption too long — sending as 2 messages")
-
-    # 1️⃣ фото
-    r = requests.post(
-        telegram_photo_url,
-        data={
-            "chat_id": CHAT_ID,
-            "photo": image_url,
-        },
-    )
-
-    if not r.json().get("ok"):
-        raise Exception("Photo send failed")
-
-    # 2️⃣ текст отдельно
-    r = requests.post(
-        telegram_text_url,
-        data={
-            "chat_id": CHAT_ID,
-            "text": caption,
-            "parse_mode": "HTML",
-        },
-    )
-
-print("Telegram status:", r.status_code)
-print("Telegram response:", r.text)
-
-if not r.json().get("ok"):
+if not r.ok:
     raise Exception("Telegram send failed")
 
 print("=== POST SUCCESS ===")
