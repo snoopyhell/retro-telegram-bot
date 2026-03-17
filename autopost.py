@@ -88,18 +88,54 @@ caption = f"<b>{game}</b>\n\n{text}"
 
 # ---------------- SEND TO TELEGRAM ----------------
 
-telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+# ---------------- SEND TO TELEGRAM ----------------
 
-payload = {
-    "chat_id": CHAT_ID,
-    "photo": image_url,
-    "caption": caption,
-    "parse_mode": "HTML",
-}
+telegram_photo_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+telegram_text_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+caption = f"<b>{game}</b>\n\n{text}"
+
+MAX_CAPTION = 1024
 
 print("Sending post...")
 
-r = requests.post(telegram_url, data=payload)
+# ✅ если текст помещается — отправляем одним постом
+if len(caption) <= MAX_CAPTION:
+
+    r = requests.post(
+        telegram_photo_url,
+        data={
+            "chat_id": CHAT_ID,
+            "photo": image_url,
+            "caption": caption,
+            "parse_mode": "HTML",
+        },
+    )
+
+else:
+    print("Caption too long — sending as 2 messages")
+
+    # 1️⃣ фото
+    r = requests.post(
+        telegram_photo_url,
+        data={
+            "chat_id": CHAT_ID,
+            "photo": image_url,
+        },
+    )
+
+    if not r.json().get("ok"):
+        raise Exception("Photo send failed")
+
+    # 2️⃣ текст отдельно
+    r = requests.post(
+        telegram_text_url,
+        data={
+            "chat_id": CHAT_ID,
+            "text": caption,
+            "parse_mode": "HTML",
+        },
+    )
 
 print("Telegram status:", r.status_code)
 print("Telegram response:", r.text)
