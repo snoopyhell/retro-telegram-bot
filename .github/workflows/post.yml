@@ -2,7 +2,7 @@ name: Auto Post
 
 on:
   schedule:
-    - cron: '0 16 * * 2,4,6'
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 jobs:
@@ -12,12 +12,11 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Install requests
-        run: pip install requests
+      - run: pip install -r requirements.txt
 
-      - name: Run bot
-        run: python autopost.py
+      - run: python autopost.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
