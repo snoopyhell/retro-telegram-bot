@@ -1,6 +1,7 @@
 import requests
 import random
 import os
+import time
 
 print("=== SEGA AUTO BOT START ===")
 
@@ -10,7 +11,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 RAWG_API_KEY = os.getenv("RAWG_API_KEY")
 
 # -------------------------
-# LOAD GAMES FROM FILE
+# LOAD GAMES
 # -------------------------
 
 if not os.path.exists("games.txt"):
@@ -20,58 +21,114 @@ with open("games.txt", encoding="utf-8") as f:
     games = [g.strip() for g in f.readlines() if g.strip()]
 
 if not games:
-    raise Exception("games.txt is empty")
-
-game = random.choice(games)
-print("Selected:", game)
+    raise Exception("games.txt empty")
 
 # -------------------------
-# GET IMAGE FROM RAWG
+# SAFE RAWG REQUEST
+# -------------------------
+
+def safe_json_request(url):
+    try:
+        r = requests.get(url, timeout=15)
+
+        if r.status_code != 200:
+            print("RAWG bad status:", r.status_code)
+            return None
+
+        if not r.text.strip():
+            print("RAWG empty response")
+            return None
+
+        return r.json()
+
+    except Exception as e:
+        print("RAWG request error:", e)
+        return None
+
+
+# -------------------------
+# FIND IMAGE (RETRY LOGIC)
 # -------------------------
 
 def get_image(game):
-    url = f"https://api.rawg.io/api/games?key={RAWG_API_KEY}&search={game}&page_size=5"
-    r = requests.get(url).json()
 
-    for g in r.get("results", []):
-        if g.get("background_image"):
-            return g["background_image"]
+    search_variants = [
+        game,
+        game.split(":")[0],
+        game.replace("-", " "),
+    ]
 
-    raise Exception(f"No image found for {game}")
+    for name in search_variants:
 
-image_url = get_image(game)
+        url = (
+            f"https://api.rawg.io/api/games"
+            f"?key={RAWG_API_KEY}"
+            f"&search={name}"
+            f"&page_size=5"
+        )
+
+        data = safe_json_request(url)
+
+        if not data:
+            continue
+
+        for g in data.get("results", []):
+            img = g.get("background_image")
+            if img:
+                print("Matched RAWG:", g["name"])
+                return img
+
+    return None
+
+
+# -------------------------
+# TRY MULTIPLE GAMES
+# -------------------------
+
+image_url = None
+game = None
+
+random.shuffle(games)
+
+for candidate in games[:10]:  # try 10 games max
+    print("Trying:", candidate)
+
+    img = get_image(candidate)
+
+    if img:
+        game = candidate
+        image_url = img
+        break
+
+if not image_url:
+    raise Exception("No valid image found after retries")
+
+print("Selected:", game)
 print("Image OK")
 
 # -------------------------
-# BUILD POST FORMAT
+# PROMPT TYPES
 # -------------------------
 
-formats = [
+prompts = [
 
-f"""
-Напиши короткий пост до 500 символов про игру {game}.
-Опиши геймплей и особенности.
-Без ностальгии.
-В конце задай вопрос.
-Добавь теги #sega #retrogaming #megadrive
-""",
+f"""Опиши геймплей игры {game}.
+Кратко, информативно, без ностальгии.
+До 450 символов.
+В конце вопрос читателю.
+Добавь теги #sega #retrogaming #megadrive""",
 
-f"""
-Сделай сравнение игры {game} с другой игрой SEGA.
+f"""Сравни игру {game} с другой игрой SEGA.
 Коротко и по делу.
-В конце вопрос аудитории.
-Добавь теги #sega #retrogaming
-""",
+Добавь вопрос аудитории и теги.""",
 
-f"""
-Напиши интересный факт про игру {game}.
-1-2 предложения описания.
-Затем вопрос читателю.
-Добавь теги.
-"""
+f"""Расскажи интересную особенность игры {game}.
+Без воды.
+До 400 символов.
+Добавь теги."""
 ]
 
-prompt = random.choice(formats)
+prompt = random.choice(prompts)
 
 # -------------------------
 # GENERATE TEXT
@@ -82,19 +139,20 @@ headers = {
     "Content-Type": "application/json"
 }
 
-response = requests.post(
+resp = requests.post(
     "https://openrouter.ai/api/v1/chat/completions",
     headers=headers,
     json={
         "model": "openai/gpt-4o-mini",
         "messages": [{"role": "user", "content": prompt}]
-    }
+    },
+    timeout=30
 )
 
-data = response.json()
+data = resp.json()
 text = data["choices"][0]["message"]["content"].strip()
 
-# Telegram caption protection
+# Telegram caption limit safety
 if len(text) > 900:
     text = text[:880] + "..."
 
@@ -109,8 +167,7 @@ telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
 payload = {
     "chat_id": CHAT_ID,
     "photo": image_url,
-    "caption": text,
-    "parse_mode": "HTML"
+    "caption": text
 }
 
 r = requests.post(telegram_url, data=payload)
