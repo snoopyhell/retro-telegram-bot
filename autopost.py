@@ -46,6 +46,46 @@ def safe_json_request(url):
         return None
 
 # -------------------------
+# FALLBACK IMAGE SOURCES
+# -------------------------
+
+def get_fallback_image(game_name):
+    """Получить изображение из альтернативных источников"""
+    
+    # Очищаем название
+    clean_name = game_name.split('(')[0].split('[')[0].strip()
+    clean_name = clean_name.replace(" ", "%20")
+    
+    # 1. Пробуем получить из Google Custom Search (если есть API ключ)
+    google_api_key = os.getenv("GOOGLE_API_KEY")  # Опционально
+    google_cx = os.getenv("GOOGLE_CX")  # Опционально
+    
+    if google_api_key and google_cx:
+        try:
+            google_url = f"https://www.googleapis.com/customsearch/v1?q={clean_name}+SEGA+Megadrive&cx={google_cx}&key={google_api_key}&searchType=image&num=1"
+            r = requests.get(google_url, timeout=10)
+            if r.ok:
+                data = r.json()
+                if "items" in data and len(data["items"]) > 0:
+                    return data["items"][0]["link"]
+        except:
+            pass
+    
+    # 2. Пробуем получить из TheGamesDB (бесплатно, без ключа)
+    try:
+        # Сначала ищем игру
+        search_url = f"https://api.thegamesdb.net/v1/Games/ByGameName?apikey=YOUR_API_KEY&name={clean_name}"
+        # Примечание: для TheGamesDB нужна регистрация, но есть бесплатный ключ
+        # Пока используем заглушку
+        pass
+    except:
+        pass
+    
+    # 3. Используем placeholder изображения с текстом игры
+    # Это запасной вариант, если ничего не нашлось
+    return f"https://via.placeholder.com/800x400/1e1e2f/ffffff?text={clean_name}+SEGA"
+
+# -------------------------
 # FIND BEST IMAGE (IMPROVED)
 # -------------------------
 
@@ -72,29 +112,30 @@ def get_best_image(game):
             f"?key={RAWG_API_KEY}"
             f"&search={name}"
             f"&search_precise=true"
-            f"&page_size=3"
+            f"&page_size=5"
         )
         
         data = safe_json_request(url)
         
         if data and data.get("results"):
             for game_data in data["results"]:
-                # Проверяем наличие изображения
+                # Пробуем получить разные типы изображений
                 img = game_data.get("background_image")
+                if not img:
+                    img = game_data.get("background_image_additional")
+                if not img:
+                    img = game_data.get("clip")
+                
                 if img:
-                    # Пытаемся получить изображение в более высоком качестве
-                    if img.endswith(('.jpg', '.png', '.jpeg')):
-                        # Заменяем на более качественную версию
-                        high_quality_img = img.replace('/media/', '/media/resize/')
-                        print(f"Found image for: {game_data['name']}")
-                        return high_quality_img
+                    print(f"Found image for: {game_data['name']}")
+                    return img
         
         # Если точный поиск не дал результатов, пробуем обычный
         url = (
             f"https://api.rawg.io/api/games"
             f"?key={RAWG_API_KEY}"
             f"&search={name}"
-            f"&page_size=5"
+            f"&page_size=10"
         )
         
         data = safe_json_request(url)
@@ -110,11 +151,50 @@ def get_best_image(game):
             # Если название содержит поисковый запрос или наоборот
             if search_term in game_title or game_title in search_term:
                 img = game_data.get("background_image")
+                if not img:
+                    img = game_data.get("background_image_additional")
+                
                 if img:
                     print(f"Found image for: {game_data['name']}")
                     return img
     
-    return None
+    # Если ничего не нашли в RAWG, пробуем fallback
+    print("RAWG returned no images, trying fallback...")
+    fallback_img = get_fallback_image(clean_name)
+    
+    return fallback_img
+
+# -------------------------
+# DOWNLOAD AND REUPLOAD IMAGE (для надежности)
+# -------------------------
+
+def download_and_send_image(image_url, game_name):
+    """Скачивает изображение и отправляет его в Telegram как файл"""
+    try:
+        # Скачиваем изображение
+        img_response = requests.get(image_url, timeout=15)
+        if img_response.ok:
+            # Сохраняем временно
+            temp_filename = f"temp_{int(time.time())}.jpg"
+            with open(temp_filename, 'wb') as f:
+                f.write(img_response.content)
+            
+            # Отправляем через Telegram API как файл
+            telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+            
+            with open(temp_filename, 'rb') as f:
+                files = {'photo': f}
+                data = {'chat_id': CHAT_ID}
+                r = requests.post(telegram_url, files=files, data=data)
+            
+            # Удаляем временный файл
+            os.remove(temp_filename)
+            
+            return r.ok
+    except Exception as e:
+        print(f"Error downloading/sending image: {e}")
+    
+    return False
 
 # -------------------------
 # GENERATE PROPER TAGS
@@ -132,9 +212,9 @@ def generate_tags(game_name, platform="SEGA"):
     
     # Добавляем тег из первых двух слов названия
     if len(words) >= 2:
-        game_tag = f"#{words[0]}{words[1]}".replace("-", "").replace(":", "")
+        game_tag = f"#{words[0]}{words[1]}".replace("-", "").replace(":", "").replace("'", "")
     elif len(words) == 1:
-        game_tag = f"#{words[0]}".replace("-", "").replace(":", "")
+        game_tag = f"#{words[0]}".replace("-", "").replace(":", "").replace("'", "")
     else:
         game_tag = "#game"
     
@@ -159,49 +239,7 @@ def generate_tags(game_name, platform="SEGA"):
     else:
         tags.append("#megadrive")  # тег по умолчанию
     
-    # Добавляем тег жанра, если сможем определить
-    genre_tags = get_game_genre(game_name)
-    if genre_tags:
-        tags.extend(genre_tags)
-    
     return " ".join(tags)
-
-# -------------------------
-# GET GAME GENRE (OPTIONAL)
-# -------------------------
-
-def get_game_genre(game_name):
-    try:
-        clean_name = game_name.split('(')[0].strip()
-        url = (
-            f"https://api.rawg.io/api/games"
-            f"?key={RAWG_API_KEY}"
-            f"&search={clean_name}"
-            f"&page_size=1"
-        )
-        
-        data = safe_json_request(url)
-        
-        if data and data.get("results"):
-            genres = data["results"][0].get("genres", [])
-            if genres:
-                genre = genres[0].get("name", "").lower()
-                genre_map = {
-                    "action": "#action",
-                    "adventure": "#adventure",
-                    "rpg": "#rpg",
-                    "shooter": "#shooter",
-                    "platformer": "#platformer",
-                    "racing": "#racing",
-                    "sports": "#sports",
-                    "fighting": "#fighting",
-                    "puzzle": "#puzzle",
-                    "strategy": "#strategy"
-                }
-                return [genre_map.get(genre, "")]
-    except:
-        pass
-    return []
 
 # -------------------------
 # TRY MULTIPLE GAMES
@@ -209,11 +247,10 @@ def get_game_genre(game_name):
 
 image_url = None
 selected_game = None
-game_info = None
 
 random.shuffle(games)
 
-for candidate in games[:15]:  # try 15 games max
+for candidate in games[:20]:  # try 20 games max
     print(f"Trying: {candidate}")
     
     img = get_best_image(candidate)
@@ -226,40 +263,42 @@ for candidate in games[:15]:  # try 15 games max
     time.sleep(1)  # Небольшая задержка между запросами
 
 if not image_url:
-    raise Exception("No valid image found after retries")
+    # Если совсем нет картинок, создаем заглушку
+    selected_game = random.choice(games)
+    clean_name = selected_game.split('(')[0].split('[')[0].strip()
+    image_url = f"https://via.placeholder.com/800x400/1e1e2f/ffffff?text={clean_name.replace(' ', '+')}+SEGA"
+    print(f"Using placeholder for: {selected_game}")
 
 print(f"Selected: {selected_game}")
-print("Image OK")
+print(f"Image URL: {image_url}")
 
 # -------------------------
-# PROMPT TYPES (IMPROVED)
+# PROMPT TYPES
 # -------------------------
 
 prompts = [
     f"""Напиши пост об игре {selected_game} для SEGA.
-В посте расскажи:
-- Краткое описание игры
+Расскажи:
+- О чем игра
 - Особенности геймплея
-- Почему в нее стоит поиграть сейчас
+- Почему она запомнилась
 
-Тон: ностальгический, но информативный.
 Объем: 300-400 символов.
-В конце добавь вопрос к аудитории.
+В конце задай вопрос.
+Без markdown.""",
 
-Не используй markdown, только plain text.""",
+    f"""Интересный факт об игре {selected_game} для SEGA.
+Что в ней было уникального?
+Почему стоит поиграть сегодня?
 
-    f"""Расскажи интересный факт об игре {selected_game} для SEGA.
-Что в ней было уникального для своего времени?
-Почему игроки ее запомнили?
+Кратко, 200-300 символов.
+Закончи вопросом.""",
 
-Кратко, емко, 250-300 символов.
-Задай вопрос читателям в конце.""",
+    f"""Сравни {selected_game} с другими играми SEGA.
+Что в ней особенного?
+Какой ваш опыт?
 
-    f"""Сравни {selected_game} с современными играми похожего жанра.
-Что SEGA-версия делала лучше?
-Что было ограничено технически?
-
-200-300 символов, закончи вопросом."""
+~300 символов, вопрос в конце."""
 ]
 
 prompt = random.choice(prompts)
@@ -270,9 +309,7 @@ prompt = random.choice(prompts)
 
 headers = {
     "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-    "Content-Type": "application/json",
-    "HTTP-Referer": "https://github.com/your-repo",  # Замените на свой репозиторий
-    "X-Title": "SEGA Auto Poster"
+    "Content-Type": "application/json"
 }
 
 try:
@@ -292,30 +329,25 @@ try:
     
     if "error" in data:
         print(f"API Error: {data['error']}")
-        # Fallback текст
-        text = f"Игра {selected_game} для SEGA. Классика, которая заслуживает внимания! А вы играли в эту игру? {generate_tags(selected_game)}"
+        text = f"Игра {selected_game} для SEGA. Классика, которая заслуживает внимания! А вы играли в эту игру?"
     else:
         generated_text = data["choices"][0]["message"]["content"].strip()
         
         # Генерируем теги
         tags = generate_tags(selected_game)
         
-        # Убираем возможные дубли тегов из сгенерированного текста
+        # Убираем возможные дубли тегов
         if "#" in generated_text:
-            # Если теги уже есть в тексте, оставляем только текст без тегов
             text_parts = generated_text.split('#')
             generated_text = text_parts[0].strip()
         
-        # Объединяем текст с тегами
         text = f"{generated_text}\n\n{tags}"
         
-        # Ограничиваем длину
         if len(text) > 900:
             text = text[:880] + "...\n\n" + tags
 
 except Exception as e:
     print(f"Generation error: {e}")
-    # Fallback текст
     text = f"Игра {selected_game} для SEGA. Классика, которая заслуживает внимания! А вы играли в эту игру? {generate_tags(selected_game)}"
 
 print("Text generated")
@@ -324,6 +356,9 @@ print("Text generated")
 # SEND TO TELEGRAM
 # -------------------------
 
+print("Sending to Telegram...")
+
+# Пробуем отправить с URL
 telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
 
 payload = {
@@ -334,14 +369,26 @@ payload = {
 
 try:
     r = requests.post(telegram_url, data=payload, timeout=30)
-    print(f"Telegram: {r.status_code}")
+    print(f"Telegram response: {r.status_code}")
     
     if not r.ok:
-        print(f"Error response: {r.text}")
+        print(f"Error: {r.text}")
         
-        # Fallback - пробуем отправить без фото, только текст
-        if r.status_code == 400:  # Bad request (возможно проблема с фото)
-            print("Trying to send without photo...")
+        # Если URL не работает, пробуем скачать и отправить
+        print("Trying to download and reupload image...")
+        if download_and_send_image(image_url, selected_game):
+            print("Image downloaded and sent successfully")
+            
+            # Отправляем текст отдельно (если фото отправилось без текста)
+            text_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            text_payload = {
+                "chat_id": CHAT_ID,
+                "text": text
+            }
+            requests.post(text_url, data=text_payload)
+        else:
+            # Если совсем не получается с фото, шлем только текст
+            print("Sending text only...")
             text_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
             text_payload = {
                 "chat_id": CHAT_ID,
@@ -351,7 +398,16 @@ try:
             print(f"Text only result: {r2.status_code}")
             
 except Exception as e:
-    print(f"Telegram send error: {e}")
-    raise
+    print(f"Error: {e}")
+    # Пробуем отправить только текст
+    try:
+        text_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        text_payload = {
+            "chat_id": CHAT_ID,
+            "text": text
+        }
+        requests.post(text_url, data=text_payload)
+    except:
+        pass
 
-print("=== POST SUCCESS ===")
+print("=== POST ATTEMPT COMPLETED ===")
