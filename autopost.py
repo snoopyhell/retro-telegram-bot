@@ -1,115 +1,110 @@
 import requests
-import random
 import os
+import random
+import urllib.parse
+
+print("=== RETRO BOT FINAL START ===")
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 RAWG_API_KEY = os.environ["RAWG_API_KEY"]
 
-print("=== RETRO BOT AUTO START ===")
+# ---------------- LOAD GAMES ----------------
 
-# ---------------- LOAD GAME ----------------
-
-with open("games.txt", encoding="utf-8") as f:
+with open("topics.txt", encoding="utf-8") as f:
     games = [g.strip() for g in f if g.strip()]
 
 game = random.choice(games)
-print("Selected:", game)
+print("Selected game:", game)
 
-# ---------------- GET IMAGE FROM RAWG ----------------
+# ---------------- RAWG IMAGE SEARCH ----------------
 
-def get_game_image(name):
+def get_game_image(game_name):
+    query = urllib.parse.quote(game_name)
 
-    url = "https://api.rawg.io/api/games"
-
-    r = requests.get(
-        url,
-        params={
-            "key": RAWG_API_KEY,
-            "search": name,
-            "page_size": 1
-        },
-        timeout=30
+    url = (
+        f"https://api.rawg.io/api/games"
+        f"?key={RAWG_API_KEY}"
+        f"&search={query}"
+        f"&page_size=5"
     )
 
+    r = requests.get(url, timeout=20)
     data = r.json()
 
-    results = data.get("results")
-
-    if not results:
+    if not data.get("results"):
         return None
 
-    image = results[0].get("background_image")
+    # ищем максимально похожее название
+    for g in data["results"]:
+        name = g["name"].lower()
+        if game_name.lower() in name:
+            print("Matched RAWG:", g["name"])
+            return g.get("background_image")
 
-    return image
+    # fallback — первый результат
+    return data["results"][0].get("background_image")
 
 
 image_url = get_game_image(game)
+
+if not image_url:
+    raise Exception("No image found — stopping post")
 
 print("Image:", image_url)
 
 # ---------------- GENERATE TEXT ----------------
 
-def generate_text(game):
+prompt = f"""
+Напиши короткое описание ретро-игры "{game}".
 
-    prompt = f"""
-Опиши ретро-игру {game}.
-Кратко расскажи:
-- геймплей
+Требования:
+- 5–7 предложений
+- описание геймплея
+- особенности игры
 - механики
-- особенности
-4 предложения.
-Без ностальгии.
+- без ностальгии
+- стиль как обзор игры
 """
 
-    r = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model": "openai/gpt-4o-mini",
-            "messages": [{"role": "user", "content": prompt}]
-        },
-        timeout=120
-    )
+response = requests.post(
+    "https://openrouter.ai/api/v1/chat/completions",
+    headers={
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "model": "openai/gpt-4o-mini",
+        "messages": [{"role": "user", "content": prompt}],
+    },
+    timeout=60,
+)
 
-    r.raise_for_status()
+data = response.json()
+text = data["choices"][0]["message"]["content"]
 
-    return r.json()["choices"][0]["message"]["content"].strip()
+caption = f"<b>{game}</b>\n\n{text}"
 
+# ---------------- SEND TO TELEGRAM ----------------
 
-text = generate_text(game)
+telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
 
-caption = f"🎮 {game}\n\n{text}"
+payload = {
+    "chat_id": CHAT_ID,
+    "photo": image_url,
+    "caption": caption,
+    "parse_mode": "HTML",
+}
 
-# ---------------- TELEGRAM POST ----------------
+print("Sending post...")
 
-if image_url:
+r = requests.post(telegram_url, data=payload)
 
-    r = requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-        data={
-            "chat_id": CHAT_ID,
-            "photo": image_url,
-            "caption": caption[:1024]
-        },
-        timeout=60
-    )
+print("Telegram status:", r.status_code)
+print("Telegram response:", r.text)
 
-else:
-
-    r = requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        data={
-            "chat_id": CHAT_ID,
-            "text": caption
-        }
-    )
-
-print("Telegram:", r.text)
-r.raise_for_status()
+if not r.json().get("ok"):
+    raise Exception("Telegram send failed")
 
 print("=== POST SUCCESS ===")
