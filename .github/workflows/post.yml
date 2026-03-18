@@ -2,7 +2,7 @@ name: Auto Post
 
 on:
   schedule:
-    - cron: "0 18 */2 * *"
+    - cron: "0 15 */2 * *"
   workflow_dispatch:
 
 jobs:
